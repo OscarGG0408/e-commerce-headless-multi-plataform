@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery, gql } from '@apollo/client';
+import { useQuery, useMutation, gql } from '@apollo/client';
 import client from '../../apollo-client';
 import { ApolloProvider } from '@apollo/client';
 import Navbar from '../../components/Navbar';
@@ -21,15 +21,43 @@ const GET_PRODUCT = gql`
   }
 `;
 
+const CREATE_CART = gql`
+  mutation CreateCart {
+    createCart {
+      id
+    }
+  }
+`;
+
+const ADD_TO_CART = gql`
+  mutation AddToCart($cartId: ID!, $productId: ID!, $quantity: Int!) {
+    addToCart(cartId: $cartId, productId: $productId, quantity: $quantity) {
+      id
+      items {
+        id
+        productId
+        title
+        price
+        quantity
+      }
+      total
+    }
+  }
+`;
+
 function ProductDetailContent() {
   const { id } = useParams();
   const router = useRouter();
   const [quantity, setQuantity] = useState(1);
   const [added, setAdded] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   const { loading, error, data } = useQuery(GET_PRODUCT, {
     variables: { id },
   });
+
+  const [createCart] = useMutation(CREATE_CART);
+  const [addToCartMutation] = useMutation(ADD_TO_CART);
 
   if (loading) {
     return (
@@ -53,29 +81,41 @@ function ProductDetailContent() {
 
   const { product } = data;
 
-  const addToCart = () => {
-    const cart = JSON.parse(localStorage.getItem('cart') || '[]');
-    const existingItemIndex = cart.findIndex((item: any) => item.id === product.id);
+  const handleAddToCart = async () => {
+    setAdding(true);
+    try {
+      let cartId = localStorage.getItem('cartId');
+      if (!cartId) {
+        const { data: cartData } = await createCart();
+        if (cartData?.createCart) {
+          cartId = cartData.createCart.id;
+          localStorage.setItem('cartId', cartId!);
+        }
+      }
 
-    if (existingItemIndex > -1) {
-      cart[existingItemIndex].quantity += quantity;
-    } else {
-      cart.push({
-        id: product.id,
-        title: product.title,
-        price: product.price,
-        currency: product.currency,
-        quantity,
+      const { data: updatedCartData } = await addToCartMutation({
+        variables: {
+          cartId,
+          productId: product.id,
+          quantity
+        }
       });
+
+      if (updatedCartData?.addToCart) {
+        // Guardar items locales para el Navbar y el Cart page fallback
+        const cartItems = updatedCartData.addToCart.items;
+        localStorage.setItem('cart', JSON.stringify(cartItems));
+        
+        setAdded(true);
+        // Disparar evento para actualizar el navbar
+        window.dispatchEvent(new Event('cart-updated'));
+        setTimeout(() => setAdded(false), 2000);
+      }
+    } catch (err) {
+      console.error('Error al agregar al carrito:', err);
+    } finally {
+      setAdding(false);
     }
-
-    localStorage.setItem('cart', JSON.stringify(cart));
-    setAdded(true);
-
-    // Disparar evento para actualizar el navbar
-    window.dispatchEvent(new Event('cart-updated'));
-
-    setTimeout(() => setAdded(false), 2000);
   };
 
   return (
@@ -132,7 +172,8 @@ function ProductDetailContent() {
 
             {/* Add to Cart Button */}
             <button
-              onClick={addToCart}
+              onClick={handleAddToCart}
+              disabled={adding}
               className={`w-full py-4 rounded-full font-bold transition-all duration-300 flex items-center justify-center space-x-2 ${
                 added
                   ? 'bg-emerald-600 text-white'
@@ -140,7 +181,7 @@ function ProductDetailContent() {
               }`}
             >
               <ShoppingBag className="w-5 h-5" />
-              <span>{added ? '¡Añadido al Carrito!' : 'Añadir al Carrito'}</span>
+              <span>{adding ? 'Agregando...' : added ? '¡Añadido al Carrito!' : 'Añadir al Carrito'}</span>
             </button>
 
             {/* Badges */}
